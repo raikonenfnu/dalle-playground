@@ -1,6 +1,7 @@
 import os
 import random
 from functools import partial
+import time
 
 import jax
 import numpy as np
@@ -14,13 +15,9 @@ from vqgan_jax.modeling_flax_vqgan import VQModel
 from flax.jax_utils import replicate
 from flax.training.common_utils import shard_prng_key
 
-import wandb
-
 from consts import COND_SCALE, DALLE_COMMIT_ID, DALLE_MODEL_MEGA_FULL, DALLE_MODEL_MEGA, DALLE_MODEL_MINI, GEN_TOP_K, GEN_TOP_P, TEMPERATURE, VQGAN_COMMIT_ID, VQGAN_REPO, ModelSize
 
 os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform" # https://github.com/saharmor/dalle-playground/issues/14#issuecomment-1147849318
-os.environ["WANDB_SILENT"] = "true"
-wandb.init(anonymous="must")
 
 # model inference
 @partial(jax.pmap, axis_name="batch", static_broadcasted_argnums=(3, 4, 5, 6, 7))
@@ -55,8 +52,8 @@ class DalleModel:
         else:
             dalle_model = DALLE_MODEL_MINI
             dtype = jnp.float32
-            
-            
+
+
         # Load dalle-mini
         self.model, params = DalleBart.from_pretrained(
             dalle_model, revision=DALLE_COMMIT_ID, dtype=dtype, _do_init=False
@@ -79,7 +76,10 @@ class DalleModel:
 
 
     def generate_images(self, prompt: str, num_predictions: int):
+        time_start = time.time()
+        print("tokenizing")
         tokenized_prompt = self.tokenize_prompt(prompt)
+        print("tokenizing done", time.time()-time_start)
 
         # create a random key
         seed = random.randint(0, 2 ** 32 - 1)
@@ -90,7 +90,7 @@ class DalleModel:
         for i in range(max(num_predictions // jax.device_count(), 1)):
             # get a new key
             key, subkey = jax.random.split(key)
-
+            print("generating encoding")
             encoded_images = p_generate(
                 tokenized_prompt,
                 shard_prng_key(subkey),
@@ -101,12 +101,16 @@ class DalleModel:
                 COND_SCALE,
                 self.model
             )
+            print("encoding done", time.time()-time_start)
 
             # remove BOS
             encoded_images = encoded_images.sequences[..., 1:]
 
             # decode images
+            print("decoding image")
             decoded_images = p_decode(self.vqgan, encoded_images, self.vqgan_params)
+            print("decoding done", time.time()-time_start )
+            print("clipping decoded image")
             decoded_images = decoded_images.clip(0.0, 1.0).reshape((-1, 256, 256, 3))
             for img in decoded_images:
                 images.append(Image.fromarray(np.asarray(img * 255, dtype=np.uint8)))

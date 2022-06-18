@@ -1,5 +1,7 @@
 /venv
-/wandb
+.DS_Store
+ENV_NAME/
+wandb/
 /.vscode
 /backend/__pycache__
 /interface/node_modules
